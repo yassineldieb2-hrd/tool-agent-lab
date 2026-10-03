@@ -1,0 +1,5 @@
+step 1: calculator({"expression": "0.15 * 240 + 7"}) -> 43
+step 2: convert_units({"value": 10, "from_unit": "km", "to_unit": "mi"}) -> 6.21371 mi
+
+15% of 240 plus 7 is 43, and 10 km is about 6.21371 miles.
+[2 model call(s), stopped: answered]
