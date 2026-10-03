@@ -1,8 +1,7 @@
 """Tools: a Python function + a JSON Schema derived from its signature + argument validation.
 
-Upstream (agentic-patterns-course) validated arguments against a hand-written signature string
-and crashed on unknown tools. Here the schema is generated from type hints and docstrings, and
-every failure is turned into a message the model can read and recover from.
+The schema is generated from type hints and docstrings, and every failure is turned into a
+message the model can read and recover from.
 """
 from __future__ import annotations
 

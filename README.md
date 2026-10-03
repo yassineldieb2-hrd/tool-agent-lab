@@ -1,22 +1,22 @@
 # tool-agent-lab
 
-A tool-calling **agent loop built from scratch** (no LangChain/CrewAI) for local LLMs via [Ollama](https://ollama.com),
-plus a small **reflection** (draft → critique → revise) loop. The focus is on the unglamorous parts that make agents
-usable: schema generation, argument validation, error recovery, loop guards and testing without a real model.
+A tool-calling **agent loop built from scratch** (no LangChain or CrewAI) for local LLMs via [Ollama](https://ollama.com),
+plus a **reflection** loop (draft, critique, revise). The focus is the engineering that makes agents dependable:
+schema generation, argument validation, error recovery, loop guards, and testing without a real model.
 
-Based in part on [neural-maze/agentic-patterns-course](https://github.com/neural-maze/agentic-patterns-course) (MIT). See [SOURCES.md](SOURCES.md).
-
-## Why I built it
-To understand what an "agent" actually is at the code level - a loop around a model, a set of tools, and a message history - and what can go wrong.
+## The problem
+Agent frameworks hide the loop that matters: the model requests a tool, your code runs it, and the result goes back into the
+conversation. Models also produce malformed calls, repeat themselves and call tools that do not exist. This project implements
+that loop explicitly and makes each failure mode observable and testable.
 
 ## Features
-- `@tool` decorator: JSON Schema built from type hints + docstring `Args:`
-- Strict validation (missing/unknown/mistyped args, JSON-string arguments); errors returned to the model as `ERROR: ...` so it can self-correct
-- Multi-step loop with `max_steps`, repeated-call detection, truncated observations
+- `@tool` decorator: JSON Schema built from type hints and the docstring `Args:` section
+- Strict argument validation (missing, unknown and mistyped arguments, arguments passed as JSON strings); errors go back to the model as `ERROR: ...` so it can self-correct
+- Multi-step loop with `max_steps`, repeated-call detection and truncated observations
 - Unknown tools and crashing tools never crash the agent
-- Calculator uses `ast`, not `eval` (model output is untrusted)
-- Reflection loop with approval token and bounded rounds
-- Ollama client with friendly errors; `ScriptedLLM` for offline demos/tests
+- Safe calculator built on `ast`, never `eval`
+- Reflection loop with an approval token and bounded rounds
+- Ollama client with clear errors; `ScriptedLLM` for deterministic runs and tests
 - 39 pytest tests
 
 ## Architecture
@@ -33,24 +33,32 @@ user question
               validate → execute → str (errors included)
  guards: max_steps · same call 3x → stop · observation ≤ 2000 chars · unknown tool → error message
 ```
+Runtime dependencies: Python 3.10+ standard library only (`urllib`, `ast`, `zoneinfo`). Tests: pytest.
 
-## Tech stack
-Python 3.10+, standard library only at runtime (`urllib`, `ast`, `zoneinfo`), pytest.
+## Key technical decisions
+- **Native tool calling** through Ollama's `/api/chat` with `tools`, so no API key, no paid service and no regex parsing of model text.
+- **All failures become observations.** Bad JSON, bad arguments, unknown tools and tool exceptions are returned to the model as `ERROR:` messages instead of exceptions.
+- **Generated schemas.** Tool definitions come from type hints and docstrings, so the schema the model sees cannot drift from the function.
+- **Guardrails.** Step limit, identical-call detection, observation truncation, and `ast`-based arithmetic because model output is untrusted.
+- **Tool output is data.** The system prompt says so; this is a mitigation, not a guarantee.
+- **Model-free testing.** A scripted LLM and a fake Ollama HTTP server make loop behaviour deterministic.
 
 ## How to run
 ```bash
 pip install -e ".[dev]"
 python -m pytest                                  # no model needed
 python -m tool_agent_lab tools                    # show generated tool schemas
-python -m tool_agent_lab ask --llm demo           # scripted replay, no model needed
+python -m tool_agent_lab ask --llm demo           # scripted model, no Ollama needed
 # with a real local model:
 ollama pull llama3.2
 python -m tool_agent_lab ask "What is 15% of 240 plus 7, and how many miles is 10 km?"
 python -m tool_agent_lab reflect "Write a two-sentence product description for a reusable bottle"
 ```
+Configuration (`OLLAMA_URL`, `LLM_MODEL`) is described in `.env.example`; export the variables in your shell.
 
 ## Example
-`--llm demo` is a **scripted replay** (it proves the loop, not a model's ability). Output in [examples/demo_output.txt](examples/demo_output.txt):
+`--llm demo` runs a scripted model, so it exercises the loop, tools and guards rather than a real model's ability
+([examples/demo_output.txt](examples/demo_output.txt)):
 ```
 step 1: calculator({"expression": "0.15 * 240 + 7"}) -> 43
 step 2: convert_units({"value": 10, "from_unit": "km", "to_unit": "mi"}) -> 6.21371 mi
@@ -58,7 +66,6 @@ step 2: convert_units({"value": 10, "from_unit": "km", "to_unit": "mi"}) -> 6.21
 15% of 240 plus 7 is 43, and 10 km is about 6.21371 miles.
 [2 model call(s), stopped: answered]
 ```
-I have **not** run this against a real Ollama model in my build environment; the Ollama client is tested against a local fake HTTP server. Whether a given small model emits good tool calls is for you to try.
 
 ## Adding a tool
 ```python
@@ -75,27 +82,17 @@ def word_count(text: str) -> str:
 ```
 Pass it in the list given to `ToolAgent`.
 
-## What I changed / added vs. upstream
-See [SOURCES.md](SOURCES.md).
-
-## Key Technical Concepts
-- **Agent = loop**: call the model; if it asks for tools, run them and append results; repeat until it answers.
-- **Function/tool calling**: the model is given JSON Schemas and returns structured call requests (name + arguments); *your code* executes them.
-- **Message roles**: system, user, assistant (may include `tool_calls`), tool (observation).
-- **Tool descriptions matter**: the model chooses tools from the name and description text.
-- **Validation and error feedback**: models make malformed calls; returning a clear error often lets them retry correctly.
-- **Guardrails**: step limits, loop detection, output truncation, never `eval` model output.
-- **Prompt injection via tool output**: tool results are data; the system prompt says so, but this is mitigation only.
-- **Reflection pattern**: a second pass critiques the first; costs extra calls and only helps when the critic can actually find problems.
-- **Testing non-deterministic systems**: replace the model with a scripted fake and assert on the loop's behaviour.
+## Testing
+39 tests cover schema generation, argument validation, the loop and its guards (step limit, repeated calls, truncation, unknown and
+crashing tools), the safe calculator, the reflection loop, and the Ollama client against a local fake HTTP server.
 
 ## Limitations
 - Sequential tool calls only; no parallelism, streaming or memory across runs
-- Only str/int/float/bool parameters; no nested objects or enums
-- Loop detection is exact-match (a model varying its arguments slightly can still loop until `max_steps`)
-- Tool-calling quality depends on the model; small models can ignore tools
+- Only `str`, `int`, `float` and `bool` parameters; no nested objects or enums
+- Loop detection is exact-match, so a model that varies its arguments slightly can still loop until `max_steps`
+- Tool-calling quality depends on the model, and small models can ignore tools; behaviour against a real Ollama model has not been benchmarked
 - Reflection uses the same model as critic, which can approve its own mistakes
 - ReAct/planning and multi-agent patterns are not implemented
 
-## Future improvements
-Enum/optional types in schemas, tool-call retries with a repair prompt, token/time budgets, a small evaluation set of questions with expected tool traces, a planning step, structured logging.
+## License
+MIT, see [LICENSE](LICENSE). Third-party attributions: [SOURCES.md](SOURCES.md).

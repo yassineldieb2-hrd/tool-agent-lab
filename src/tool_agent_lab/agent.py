@@ -1,7 +1,6 @@
 """The agent loop: model -> (tool calls -> observations)* -> final answer.
 
-Compared with upstream's ToolAgent (one tool round, then a second model call), this loops until the
-model answers without tool calls, and has guards: max steps, loop detection, truncated observations,
+The loop continues until the model answers without tool calls, and has guards: max steps, loop detection, truncated observations,
 unknown tools reported to the model instead of raising.
 """
 from __future__ import annotations
